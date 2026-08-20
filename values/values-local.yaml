@@ -1,0 +1,173 @@
+# =============================================================================
+# Velero — LOCAL / on-prem cluster (backup target = in-cluster MinIO)
+# Chart: vmware-tanzu/velero 12.1.0   |   Velero: v1.18.1
+# =============================================================================
+# Tailored to this cluster's actual capabilities:
+#   * no CSI snapshotter installed  -> snapshotsEnabled: false, Kopia fs-backup
+#   * control-plane node is tainted -> node-agent tolerates it so pods scheduled
+#     there can still have their volumes backed up
+#   * storage via local-path-provisioner (see manifests/local-path-provisioner.yaml)
+#
+# Credentials are NOT in this file. They live in the Secret
+# velero/velero-minio-credentials, created by scripts/gen-credentials.sh.
+# =============================================================================
+
+image:
+  repository: velero/velero
+  tag: v1.18.1
+  pullPolicy: IfNotPresent
+
+# ---------------------------------------------------------------------------
+# Object-storage plugin. MinIO speaks the S3 API, so the AWS plugin is what
+# drives it — there is no separate "MinIO plugin".
+# Plugin v1.14.x pairs with Velero v1.18.x.
+# ---------------------------------------------------------------------------
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.14.2
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: velero
+      default: true
+      accessMode: ReadWrite
+      # Read the S3 keys from the pre-created Secret rather than inlining them.
+      credential:
+        name: velero-minio-credentials
+        key: cloud
+      config:
+        # MinIO ignores region, but the AWS SDK requires *some* value.
+        region: minio
+        # Required for MinIO: bucket in the path (minio:9000/velero), not as a
+        # DNS subdomain (velero.minio:9000).
+        s3ForcePathStyle: "true"
+        # Used by the in-cluster velero server / node-agent.
+        s3Url: http://minio.minio.svc.cluster.local:9000
+        # Used by the `velero` CLI on your workstation, which cannot resolve
+        # cluster-internal DNS. Without publicUrl, `velero backup logs` and
+        # `velero backup describe --details` fail with
+        #   "lookup minio.minio.svc.cluster.local ... server misbehaving"
+        # even though the backup itself succeeded. This is the minio-nodeport
+        # Service from manifests/minio.yaml.
+        publicUrl: http://192.168.56.134:30900
+
+  # Kopia is the modern uploader (replaces Restic). Also the velero default.
+  uploaderType: kopia
+
+  # No CSI snapshots on this cluster, so back up volume *contents* over the
+  # filesystem by default. Without this you must annotate every pod with
+  #   backup.velero.io/backup-volumes=<volumeName>
+  # and PVC data would otherwise be silently skipped.
+  defaultVolumesToFsBackup: true
+
+  logLevel: info
+  logFormat: text
+
+  # Lab-friendly retention: backups are GC'd after 7 days unless --ttl overrides.
+  defaultBackupTTL: 168h
+
+  # Keep the Kopia repository tidy on a small cluster.
+  defaultRepoMaintainFrequency: 24h
+  repositoryMaintenanceJob:
+    repositoryConfigData:
+      global:
+        keepLatestMaintenanceJobs: 2
+        podResources:
+          cpuRequest: "50m"
+          cpuLimit: "500m"
+          memoryRequest: "128Mi"
+          memoryLimit: "512Mi"
+
+credentials:
+  useSecret: true
+  # Pre-existing Secret => no secret material in this file or in Helm history.
+  existingSecret: velero-minio-credentials
+
+backupsEnabled: true
+
+# CRITICAL for this cluster: there is no external-snapshotter, no
+# VolumeSnapshotClass and no CSI storage driver. Leaving this true creates a
+# VolumeSnapshotLocation that can never work and makes backups log errors.
+snapshotsEnabled: false
+
+# ---------------------------------------------------------------------------
+# node-agent: the DaemonSet that actually reads/writes volume data with Kopia.
+# Required whenever you use fs-backup. Without it, PVC contents are NOT backed
+# up — you'd only get the Kubernetes objects.
+# ---------------------------------------------------------------------------
+deployNodeAgent: true
+
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods   # correct for kubeadm + containerd
+  tolerations:
+    # k8s-cp-0 carries node-role.kubernetes.io/control-plane:NoSchedule.
+    # The DaemonSet must tolerate it to cover any pod running on that node.
+    - key: node-role.kubernetes.io/control-plane
+      operator: Exists
+      effect: NoSchedule
+    - key: node-role.kubernetes.io/master
+      operator: Exists
+      effect: NoSchedule
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# Velero server resources — modest, this is a 2-node lab cluster.
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# ---------------------------------------------------------------------------
+# Metrics. The Service is created and annotated for scraping. ServiceMonitor is
+# left off because this cluster runs the plain prometheus chart, not the
+# Prometheus Operator, so the ServiceMonitor CRD does not exist.
+# ---------------------------------------------------------------------------
+metrics:
+  enabled: true
+  scrapeInterval: 30s
+  service:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8085"
+      prometheus.io/path: "/metrics"
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+# Velero manages its own CRDs on upgrade.
+upgradeCRDs: true
+cleanUpCRDs: false
+
+# ---------------------------------------------------------------------------
+# Scheduled backups. Cron is in the velero pod's timezone (UTC by default).
+# Enable by uncommenting; see docs/04-schedules-and-retention.md.
+# ---------------------------------------------------------------------------
+schedules: {}
+#  daily-full:
+#    disabled: false
+#    schedule: "0 2 * * *"
+#    useOwnerReferencesInBackup: false
+#    template:
+#      ttl: "336h"          # keep 14 days
+#      storageLocation: default
+#      defaultVolumesToFsBackup: true
+#      excludedNamespaces:
+#        - kube-system
+#        - local-path-storage
+#        - minio           # never back the backup store up into itself
+#        - velero

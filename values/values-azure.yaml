@@ -1,0 +1,168 @@
+# =============================================================================
+# Velero — Azure / AKS (Blob Storage + Disk CSI snapshots)
+# Chart: vmware-tanzu/velero 12.1.0   |   Velero: v1.18.1
+# =============================================================================
+# PREREQUISITES
+#
+# 1. Storage account + container (must be a GPv2 account):
+#      AZURE_BACKUP_RESOURCE_GROUP=velero-rg
+#      az group create -n $AZURE_BACKUP_RESOURCE_GROUP --location westeurope
+#      az storage account create --name veleroSA123 \
+#        -g $AZURE_BACKUP_RESOURCE_GROUP --sku Standard_LRS \
+#        --encryption-services blob --https-only true \
+#        --kind BlobStorage --access-tier Hot
+#      az storage container create -n velero --public-access off \
+#        --account-name veleroSA123
+#
+# 2. Credentials — pick ONE:
+#
+#    (A) Workload Identity (preferred on AKS):
+#          az identity create -g $AZURE_BACKUP_RESOURCE_GROUP -n velero
+#          az identity federated-credential create --name velero \
+#            --identity-name velero -g $AZURE_BACKUP_RESOURCE_GROUP \
+#            --issuer "$(az aks show -g <RG> -n <CLUSTER> \
+#                        --query oidcIssuerProfile.issuerUrl -o tsv)" \
+#            --subject system:serviceaccount:velero:velero
+#        Grant it "Contributor" on the storage account + disk resource group.
+#        Then set credentials.useSecret=false, add the SA label/annotations
+#        below, and set config.useAAD / clientId as shown.
+#
+#    (B) Service principal:
+#          az ad sp create-for-rbac --name velero --role Contributor \
+#            --scopes /subscriptions/<SUB_ID>
+#          kubectl -n velero create secret generic velero-azure-credentials \
+#            --from-literal=cloud='
+#          AZURE_SUBSCRIPTION_ID=<SUB_ID>
+#          AZURE_TENANT_ID=<TENANT_ID>
+#          AZURE_CLIENT_ID=<APP_ID>
+#          AZURE_CLIENT_SECRET=<PASSWORD>
+#          AZURE_RESOURCE_GROUP=<AKS_NODE_RESOURCE_GROUP>
+#          AZURE_CLOUD_NAME=AzurePublicCloud
+#          '
+#        NOTE: Azure's secret is KEY=VALUE lines — not AWS INI, not GCP JSON.
+#        AZURE_RESOURCE_GROUP must be the *node* resource group (usually
+#        MC_<rg>_<cluster>_<region>), the one holding the managed disks.
+#
+# 3. VolumeSnapshotClass for disk.csi.azure.com, labelled:
+#      kubectl label volumesnapshotclass <name> \
+#        velero.io/csi-volumesnapshot-class=true
+# =============================================================================
+
+image:
+  repository: velero/velero
+  tag: v1.18.1
+  pullPolicy: IfNotPresent
+
+initContainers:
+  - name: velero-plugin-for-microsoft-azure
+    image: velero/velero-plugin-for-microsoft-azure:v1.14.2
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: azure
+      bucket: velero                      # the BLOB CONTAINER name
+      default: true
+      accessMode: ReadWrite
+      prefix: <CLUSTER_NAME>              # <-- CHANGE ME
+      # Only for option (B). Delete when using Workload Identity.
+      credential:
+        name: velero-azure-credentials
+        key: cloud
+      config:
+        resourceGroup: <AZURE_BACKUP_RESOURCE_GROUP>   # <-- CHANGE ME
+        storageAccount: <STORAGE_ACCOUNT_NAME>         # <-- CHANGE ME
+        # Only if the storage account lives in another subscription:
+        # subscriptionId: <SUB_ID>
+        # Workload Identity only:
+        # useAAD: "true"
+        # clientId: <MANAGED_IDENTITY_CLIENT_ID>
+
+  volumeSnapshotLocation:
+    - name: default
+      provider: azure
+      config:
+        # Resource group that snapshots are written to.
+        resourceGroup: <AZURE_BACKUP_RESOURCE_GROUP>   # <-- CHANGE ME
+        # subscriptionId: <SUB_ID>
+
+  uploaderType: kopia
+
+  features: EnableCSI
+  defaultSnapshotMoveData: true
+  defaultVolumesToFsBackup: false
+
+  logLevel: info
+  defaultBackupTTL: 720h
+  defaultRepoMaintainFrequency: 24h
+
+credentials:
+  useSecret: true
+  existingSecret: velero-azure-credentials
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    labels: {}
+      # Workload Identity requires this label on the pod; the chart propagates
+      # SA labels. Also add the annotation below.
+      # azure.workload.identity/use: "true"
+    annotations: {}
+      # azure.workload.identity/client-id: <MANAGED_IDENTITY_CLIENT_ID>
+
+podLabels: {}
+  # Workload Identity:
+  # azure.workload.identity/use: "true"
+
+backupsEnabled: true
+snapshotsEnabled: true
+
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  tolerations:
+    - operator: Exists
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+upgradeCRDs: true
+
+schedules:
+  daily-full:
+    disabled: false
+    schedule: "0 2 * * *"
+    template:
+      ttl: "720h"
+      storageLocation: default
+      snapshotMoveData: true
+      excludedNamespaces:
+        - kube-system
+        - velero

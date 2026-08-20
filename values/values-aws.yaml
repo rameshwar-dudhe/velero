@@ -1,0 +1,175 @@
+# =============================================================================
+# Velero — AWS / EKS (S3 + EBS CSI snapshots)
+# Chart: vmware-tanzu/velero 12.1.0   |   Velero: v1.18.1
+# =============================================================================
+# PREREQUISITES
+#
+# 1. S3 bucket:
+#      aws s3api create-bucket --bucket my-velero-bucket --region eu-west-1 \
+#        --create-bucket-configuration LocationConstraint=eu-west-1
+#
+# 2. IAM policy (least privilege — attach to the role/user Velero uses):
+#      {
+#        "Version": "2012-10-17",
+#        "Statement": [
+#          {
+#            "Effect": "Allow",
+#            "Action": [
+#              "ec2:DescribeVolumes", "ec2:DescribeSnapshots",
+#              "ec2:CreateTags", "ec2:CreateVolume",
+#              "ec2:CreateSnapshot", "ec2:DeleteSnapshot"
+#            ],
+#            "Resource": "*"
+#          },
+#          {
+#            "Effect": "Allow",
+#            "Action": [
+#              "s3:GetObject", "s3:DeleteObject", "s3:PutObject",
+#              "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"
+#            ],
+#            "Resource": "arn:aws:s3:::my-velero-bucket/*"
+#          },
+#          {
+#            "Effect": "Allow",
+#            "Action": ["s3:ListBucket"],
+#            "Resource": "arn:aws:s3:::my-velero-bucket"
+#          }
+#        ]
+#      }
+#
+# 3. Credentials — pick ONE:
+#
+#    (A) IRSA, strongly preferred on EKS. No long-lived keys anywhere:
+#          eksctl create iamserviceaccount \
+#            --cluster my-cluster --namespace velero --name velero \
+#            --role-name velero-irsa \
+#            --attach-policy-arn arn:aws:iam::<ACCT>:policy/VeleroPolicy \
+#            --approve
+#        then set credentials.useSecret=false and the SA annotation below.
+#
+#    (B) Static keys (works anywhere, rotate them yourself):
+#          kubectl -n velero create secret generic velero-aws-credentials \
+#            --from-literal=cloud='[default]
+#          aws_access_key_id=AKIA...
+#          aws_secret_access_key=...
+#          '
+#        then set credentials.existingSecret and comment out the IRSA block.
+#
+# 4. EBS CSI driver + external-snapshotter, plus a VolumeSnapshotClass labelled:
+#      kubectl label volumesnapshotclass ebs-csi-snapclass \
+#        velero.io/csi-volumesnapshot-class=true
+# =============================================================================
+
+image:
+  repository: velero/velero
+  tag: v1.18.1
+  pullPolicy: IfNotPresent
+
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.14.2
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: <MY_VELERO_BUCKET>          # <-- CHANGE ME
+      default: true
+      accessMode: ReadWrite
+      prefix: <CLUSTER_NAME>              # <-- CHANGE ME; lets clusters share a bucket
+      # Only needed for option (B). Delete this block when using IRSA.
+      credential:
+        name: velero-aws-credentials
+        key: cloud
+      config:
+        region: <BUCKET_REGION>           # <-- CHANGE ME e.g. eu-west-1
+        # Real AWS S3 uses virtual-host addressing — do NOT set s3ForcePathStyle
+        # or s3Url here. Those are only for S3-compatible third parties.
+
+  volumeSnapshotLocation:
+    - name: default
+      provider: aws
+      config:
+        region: <CLUSTER_REGION>          # <-- CHANGE ME; region of the EBS volumes
+
+  uploaderType: kopia
+
+  # Prefer CSI snapshots over fs-backup on EKS: far faster, and consistent.
+  features: EnableCSI
+  # Copies snapshot data into S3 so backups survive losing the EBS snapshots
+  # (and enable cross-region / cross-account restore).
+  defaultSnapshotMoveData: true
+  defaultVolumesToFsBackup: false
+
+  logLevel: info
+  defaultBackupTTL: 720h                  # 30 days
+  defaultRepoMaintainFrequency: 24h
+
+credentials:
+  # IRSA: set useSecret false and remove the `credential:` block above.
+  useSecret: true
+  existingSecret: velero-aws-credentials
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    annotations: {}
+      # IRSA — uncomment and set:
+      # eks.amazonaws.com/role-arn: arn:aws:iam::<ACCT>:role/velero-irsa
+
+# Required for IRSA token projection to be readable by the velero process.
+podSecurityContext: {}
+  # fsGroup: 65534
+
+backupsEnabled: true
+snapshotsEnabled: true
+
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  tolerations:
+    - operator: Exists                    # cover every node, incl. tainted ones
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false                        # true if running kube-prometheus-stack
+  prometheusRule:
+    enabled: false
+
+upgradeCRDs: true
+
+schedules:
+  daily-full:
+    disabled: false
+    schedule: "0 2 * * *"
+    template:
+      ttl: "720h"
+      storageLocation: default
+      snapshotMoveData: true
+      excludedNamespaces:
+        - kube-system
+        - velero

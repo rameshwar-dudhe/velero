@@ -1,0 +1,132 @@
+---
+# =============================================================================
+# Demo workload used to prove backup AND restore actually work.
+#
+# It deliberately contains one of each thing that can go wrong:
+#   * a PVC with real data   -> proves node-agent/Kopia file system backup
+#   * a ConfigMap and Secret -> proves plain API-object backup
+#   * a Service              -> proves restore of a resource with a cluster IP
+#                               (Velero must strip the old IP on restore)
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: velero-demo
+  labels:
+    app.kubernetes.io/part-of: velero-demo
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: demo-config
+  namespace: velero-demo
+data:
+  app.conf: |
+    environment=lab
+    feature.backups=enabled
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: demo-secret
+  namespace: velero-demo
+type: Opaque
+stringData:
+  api-token: "s3cr3t-demo-token-do-not-use-in-prod"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: demo-data
+  namespace: velero-demo
+spec:
+  accessModes:
+    - ReadWriteOnce
+  # MUST be local-static, not the default local-path. local-path produces
+  # hostPath PVs, which Velero's fs-backup skips silently — the backup would say
+  # Completed and restore an EMPTY volume.
+  # See manifests/local-static-storage.yaml for the full explanation.
+  storageClassName: local-static
+  resources:
+    requests:
+      storage: 1Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-app
+  namespace: velero-demo
+  labels:
+    app: demo-app
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # single RWO volume
+  selector:
+    matchLabels:
+      app: demo-app
+  template:
+    metadata:
+      labels:
+        app: demo-app
+      # NOTE: because values-local.yaml sets defaultVolumesToFsBackup=true, no
+      # annotation is needed here. If that were false you would need:
+      #   backup.velero.io/backup-volumes: data
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: app
+          image: docker.io/library/busybox:1.37
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              # Write a marker only once, so a restart never overwrites the
+              # value we are going to compare after the restore.
+              if [ ! -f /data/marker.txt ]; then
+                echo "created-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" > /data/marker.txt
+              fi
+              echo "serving marker:"; cat /data/marker.txt
+              # Stay alive so node-agent has a running pod whose volume it can read.
+              while true; do sleep 3600; done
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: demo-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app
+  namespace: velero-demo
+spec:
+  selector:
+    app: demo-app
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

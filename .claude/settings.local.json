@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kubectl version *)",
+      "Bash(helm version *)",
+      "Bash(kubectl config *)",
+      "Bash(timeout 15 kubectl cluster-info)",
+      "Bash(timeout 15 kubectl get nodes)",
+      "Bash(timeout 20 docker ps -a)",
+      "Bash(timeout 20 docker info)",
+      "Bash(timeout 15 curl -sI https://get.helm.sh -o /dev/null -w \"internet:%{http_code}\\\\n\")",
+      "Bash(timeout 15 kubectl get sc)",
+      "Bash(timeout 15 kubectl get csidrivers)",
+      "Bash(timeout 15 kubectl get volumesnapshotclasses)",
+      "Bash(timeout 15 kubectl get crd)",
+      "Bash(timeout 15 kubectl get ns)",
+      "Bash(timeout 60 helm repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts)",
+      "Bash(timeout 60 helm repo update)",
+      "Bash(timeout 30 helm search repo vmware-tanzu/velero --versions)",
+      "Bash(timeout 15 kubectl get pv)",
+      "Bash(timeout 15 kubectl get nodes -o wide)",
+      "Bash(timeout 15 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{\"\\\\t\"}{.spec.taints}{\"\\\\n\"}{end}')",
+      "Read(//tmp/**)",
+      "Bash(timeout 120 docker pull --quiet velero/velero:v1.18.1)",
+      "Bash(echo \"exit:$?\")"
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+# Generated credentials — never commit these.
+.secrets/
+
+# Vendored chart tarballs pulled by scripts/vendor-chart.sh
+charts/*.tgz
+
+# Local scratch
+*.log
+tmp/

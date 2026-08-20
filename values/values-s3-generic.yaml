@@ -1,0 +1,189 @@
+# =============================================================================
+# Velero — ANY S3-compatible object store (the "cloud-k8s" values file)
+# Chart: vmware-tanzu/velero 12.1.0   |   Velero: v1.18.1
+# =============================================================================
+# Works with: DigitalOcean Spaces, Ceph RADOS Gateway, Wasabi, Backblaze B2,
+# Linode/Akamai Object Storage, Hetzner, Cloudflare R2, Scaleway, OVH,
+# NetApp StorageGRID, Dell ECS, external MinIO — anything speaking S3.
+#
+# The ONLY differences from values-local.yaml are the four config keys under
+# backupStorageLocation.config (s3Url / region / path style / TLS) plus whether
+# CSI snapshots are available. Everything else is identical, which is the point:
+# the same chart and the same workflow serve local and cloud.
+#
+# ---------------------------------------------------------------------------
+# BEFORE INSTALLING — 3 steps
+# ---------------------------------------------------------------------------
+# 1. Create the bucket. Velero does NOT create it for you.
+#
+# 2. Create the credentials Secret in the velero namespace. Never put keys in
+#    this file (it ends up in Helm release history, in plaintext, in etcd):
+#
+#      kubectl create namespace velero
+#      kubectl -n velero create secret generic velero-s3-credentials \
+#        --from-literal=cloud='[default]
+#      aws_access_key_id=<ACCESS_KEY>
+#      aws_secret_access_key=<SECRET_KEY>
+#      '
+#
+# 3. Fill in the four <PLACEHOLDER> values below.
+#
+# Endpoint / region cheat-sheet (region is often a dummy but must be non-empty):
+#
+#   Provider            s3Url                                           region
+#   ------------------  ----------------------------------------------  -------------
+#   DigitalOcean        https://nyc3.digitaloceanspaces.com             nyc3
+#   Cloudflare R2       https://<ACCOUNT_ID>.r2.cloudflarestorage.com   auto
+#   Wasabi              https://s3.eu-central-1.wasabisys.com           eu-central-1
+#   Backblaze B2        https://s3.us-west-004.backblazeb2.com          us-west-004
+#   Linode              https://us-east-1.linodeobjects.com             us-east-1
+#   Scaleway            https://s3.fr-par.scw.cloud                     fr-par
+#   Ceph RGW            https://rgw.internal.example.com                default
+#   External MinIO      https://minio.example.com                       minio
+# =============================================================================
+
+image:
+  repository: velero/velero
+  tag: v1.18.1
+  pullPolicy: IfNotPresent
+
+# Every S3-compatible store uses the AWS plugin. v1.14.x pairs with Velero 1.18.x.
+initContainers:
+  - name: velero-plugin-for-aws
+    image: velero/velero-plugin-for-aws:v1.14.2
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: aws
+      bucket: <YOUR_BUCKET_NAME>          # <-- CHANGE ME
+      default: true
+      accessMode: ReadWrite
+      # Store several clusters in one bucket by giving each its own prefix.
+      # Without this, two clusters sharing a bucket will fight over the same
+      # backup names and Kopia repository.
+      prefix: <CLUSTER_NAME>              # <-- CHANGE ME (e.g. prod-eu-1)
+      credential:
+        name: velero-s3-credentials
+        key: cloud
+      config:
+        region: <REGION>                  # <-- CHANGE ME (see table above)
+        s3Url: <https://ENDPOINT>         # <-- CHANGE ME (omit for real AWS S3)
+        # Nearly all non-AWS S3 implementations require path-style addressing.
+        # Symptom if wrong: DNS resolution failures or NoSuchBucket errors.
+        s3ForcePathStyle: "true"
+        # Set to "true" ONLY for a store with a self-signed certificate. Prefer
+        # supplying caCert (below) over disabling verification.
+        insecureSkipTLSVerify: "false"
+      # Base64-encoded PEM CA bundle for a private/internal certificate:
+      #   caCert: <base64 of ca.crt>
+      # Produce it with:  base64 -w0 ca.crt
+      # caCert:
+
+  uploaderType: kopia
+
+  # Set true if your CSI driver cannot snapshot (or you have no CSI driver) and
+  # you want volume *contents* copied over the filesystem. If you DO have
+  # working CSI snapshots, prefer leaving this false and using
+  # snapshotsEnabled + EnableCSI + defaultSnapshotMoveData (see below).
+  defaultVolumesToFsBackup: false
+
+  logLevel: info
+  defaultBackupTTL: 720h                  # 30 days
+  defaultRepoMaintainFrequency: 24h
+
+  # ---------------------------------------------------------------------------
+  # CSI snapshot data movement — the recommended path on a real cloud cluster.
+  # Requires: a CSI driver, the external-snapshotter CRDs, and a
+  # VolumeSnapshotClass labelled velero.io/csi-volumesnapshot-class="true".
+  #
+  # With both flags set, Velero takes a CSI snapshot and then uploads its
+  # contents to your S3 bucket, so backups survive the loss of the whole
+  # storage backend (a plain CSI snapshot does not).
+  # ---------------------------------------------------------------------------
+  features: EnableCSI
+  defaultSnapshotMoveData: true
+
+credentials:
+  useSecret: true
+  existingSecret: velero-s3-credentials
+
+backupsEnabled: true
+
+# true here creates a VolumeSnapshotLocation. Keep true when using CSI
+# snapshots; set false if this cluster has no snapshot capability at all.
+snapshotsEnabled: true
+
+# node-agent is required for BOTH fs-backup AND CSI snapshot data movement,
+# because it is the component that streams data to object storage.
+deployNodeAgent: true
+
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  # Managed services that relocate the kubelet root need this changed:
+  #   EKS Bottlerocket:  /var/lib/kubelet/pods  (default is fine)
+  #   OpenShift/CoreOS:  /var/lib/kubelet/pods  (default is fine)
+  #   Some k3s setups:   /var/lib/kubelet/pods  (default is fine)
+  #   Docker Desktop:    /var/lib/kubelet/pods  (default is fine)
+  tolerations:
+    # Cover every node so no workload's volumes are silently skipped.
+    - operator: Exists
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi   # Kopia is memory-hungry on large volumes
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+# Spread/protect the single Velero replica on a multi-node cluster.
+podDisruptionBudget:
+  enabled: true
+
+metrics:
+  enabled: true
+  scrapeInterval: 30s
+  # Turn these on if you run the Prometheus Operator (kube-prometheus-stack).
+  serviceMonitor:
+    enabled: false
+    additionalLabels: {}
+  prometheusRule:
+    enabled: false
+
+upgradeCRDs: true
+
+# ---------------------------------------------------------------------------
+# Production schedules. Times are UTC unless you set a TZ.
+# ---------------------------------------------------------------------------
+schedules:
+  daily-full:
+    disabled: false
+    schedule: "0 2 * * *"
+    template:
+      ttl: "720h"                 # keep 30 days
+      storageLocation: default
+      snapshotMoveData: true
+      excludedNamespaces:
+        - kube-system
+        - velero
+  hourly-critical:
+    disabled: true                # flip to false and set your namespaces
+    schedule: "0 * * * *"
+    template:
+      ttl: "168h"                 # keep 7 days
+      storageLocation: default
+      snapshotMoveData: true
+      includedNamespaces:
+        - production

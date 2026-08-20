@@ -1,0 +1,144 @@
+# =============================================================================
+# Velero — GCP / GKE (GCS + PD CSI snapshots)
+# Chart: vmware-tanzu/velero 12.1.0   |   Velero: v1.18.1
+# =============================================================================
+# PREREQUISITES
+#
+# 1. GCS bucket:
+#      gsutil mb -p <PROJECT_ID> -l europe-west1 gs://my-velero-bucket
+#
+# 2. Service account + roles:
+#      gcloud iam service-accounts create velero --display-name "Velero"
+#      SA=velero@<PROJECT_ID>.iam.gserviceaccount.com
+#      gcloud projects add-iam-policy-binding <PROJECT_ID> \
+#        --member serviceAccount:$SA --role roles/compute.storageAdmin
+#      gsutil iam ch serviceAccount:$SA:objectAdmin gs://my-velero-bucket
+#
+# 3. Credentials — pick ONE:
+#
+#    (A) Workload Identity, preferred on GKE. No key files:
+#          gcloud iam service-accounts add-iam-policy-binding $SA \
+#            --role roles/iam.workloadIdentityUser \
+#            --member "serviceAccount:<PROJECT_ID>.svc.id.goog[velero/velero]"
+#        then set credentials.useSecret=false, add the SA annotation below, and
+#        set backupStorageLocation.config.serviceAccount to $SA.
+#
+#    (B) JSON key file:
+#          gcloud iam service-accounts keys create creds.json --iam-account $SA
+#          kubectl -n velero create secret generic velero-gcp-credentials \
+#            --from-file=cloud=creds.json
+#        NOTE: for GCP the secret value is the raw JSON key, NOT the
+#        AWS-style INI format. Same key name (`cloud`), different content.
+#
+# 4. VolumeSnapshotClass for pd.csi.storage.gke.io, labelled:
+#      kubectl label volumesnapshotclass <name> \
+#        velero.io/csi-volumesnapshot-class=true
+# =============================================================================
+
+image:
+  repository: velero/velero
+  tag: v1.18.1
+  pullPolicy: IfNotPresent
+
+initContainers:
+  - name: velero-plugin-for-gcp
+    image: velero/velero-plugin-for-gcp:v1.14.2
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+      - mountPath: /target
+        name: plugins
+
+configuration:
+  backupStorageLocation:
+    - name: default
+      provider: gcp
+      bucket: <MY_VELERO_BUCKET>          # <-- CHANGE ME (no gs:// prefix)
+      default: true
+      accessMode: ReadWrite
+      prefix: <CLUSTER_NAME>              # <-- CHANGE ME
+      # Only for option (B). Delete when using Workload Identity.
+      credential:
+        name: velero-gcp-credentials
+        key: cloud
+      config: {}
+        # Workload Identity only — the GCP SA to impersonate:
+        # serviceAccount: velero@<PROJECT_ID>.iam.gserviceaccount.com
+
+  volumeSnapshotLocation:
+    - name: default
+      provider: gcp
+      config: {}
+        # Optional: restrict where snapshots live.
+        # snapshotLocation: europe-west1
+        # project: <PROJECT_ID>   # if snapshots go to a different project
+
+  uploaderType: kopia
+
+  features: EnableCSI
+  defaultSnapshotMoveData: true
+  defaultVolumesToFsBackup: false
+
+  logLevel: info
+  defaultBackupTTL: 720h
+  defaultRepoMaintainFrequency: 24h
+
+credentials:
+  # Workload Identity: set to false and delete the `credential:` block above.
+  useSecret: true
+  existingSecret: velero-gcp-credentials
+
+serviceAccount:
+  server:
+    create: true
+    name: velero
+    annotations: {}
+      # Workload Identity — uncomment and set:
+      # iam.gke.io/gcp-service-account: velero@<PROJECT_ID>.iam.gserviceaccount.com
+
+backupsEnabled: true
+snapshotsEnabled: true
+
+deployNodeAgent: true
+nodeAgent:
+  podVolumePath: /var/lib/kubelet/pods
+  tolerations:
+    - operator: Exists
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+podDisruptionBudget:
+  enabled: true
+
+metrics:
+  enabled: true
+  serviceMonitor:
+    enabled: false
+  prometheusRule:
+    enabled: false
+
+upgradeCRDs: true
+
+schedules:
+  daily-full:
+    disabled: false
+    schedule: "0 2 * * *"
+    template:
+      ttl: "720h"
+      storageLocation: default
+      snapshotMoveData: true
+      excludedNamespaces:
+        - kube-system
+        - velero

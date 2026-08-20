@@ -1,0 +1,1169 @@
+<title>Velero Backup Runbook</title>
+<style>
+  /* ── tokens: light (bare :root defines the COMPLETE palette) ───────────── */
+  :root {
+    --bg:          #f7f8f8;
+    --surface:     #ffffff;
+    --surface-2:   #eef1f1;
+    --border:      #d6dddc;
+    --border-firm: #bcc7c5;
+    --text:        #14201f;
+    --text-2:      #5a6a68;
+    --text-3:      #82918f;
+    --accent:      #0e6b63;
+    --accent-soft: #dcebe9;
+    --pass:        #1c6b45;
+    --pass-soft:   #dcefe4;
+    --warn:        #8a5510;
+    --warn-soft:   #f7ead4;
+    --fail:        #9b2c2c;
+    --fail-soft:   #f7dfdf;
+
+    /* terminal surfaces stay dark in BOTH themes — deliberate, and true to
+       what they represent. Defined here so they always resolve. */
+    --code-bg:     #0f1a19;
+    --code-text:   #d9e4e2;
+    --code-dim:    #7d908d;
+    --code-border: #24322f;
+
+    --font-mono: ui-monospace, "SFMono-Regular", "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+    --measure: 68ch;
+    --radius: 4px;
+  }
+  /* dark via OS, unless an explicit light choice is stamped */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg:          #0d1413;
+      --surface:     #131d1c;
+      --surface-2:   #1a2625;
+      --border:      #25332f;
+      --border-firm: #354945;
+      --text:        #e6eceb;
+      --text-2:      #93a5a2;
+      --text-3:      #6f817e;
+      --accent:      #4fd1c0;
+      --accent-soft: #14302d;
+      --pass:        #48c78e;
+      --pass-soft:   #122e22;
+      --warn:        #e0a33e;
+      --warn-soft:   #33260f;
+      --fail:        #ef6b6b;
+      --fail-soft:   #331717;
+      --code-bg:     #080f0e;
+      --code-border: #1e2b28;
+    }
+  }
+  /* explicit dark choice wins in the other direction */
+  :root[data-theme="dark"] {
+    --bg:          #0d1413;
+    --surface:     #131d1c;
+    --surface-2:   #1a2625;
+    --border:      #25332f;
+    --border-firm: #354945;
+    --text:        #e6eceb;
+    --text-2:      #93a5a2;
+    --text-3:      #6f817e;
+    --accent:      #4fd1c0;
+    --accent-soft: #14302d;
+    --pass:        #48c78e;
+    --pass-soft:   #122e22;
+    --warn:        #e0a33e;
+    --warn-soft:   #33260f;
+    --fail:        #ef6b6b;
+    --fail-soft:   #331717;
+    --code-bg:     #080f0e;
+    --code-border: #1e2b28;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 0 28px 96px;
+  }
+  .col { max-width: var(--measure); }
+
+  /* ── masthead ─────────────────────────────────────────────────────────── */
+  header.masthead {
+    border-bottom: 1px solid var(--border-firm);
+    padding: 56px 0 28px;
+    margin-bottom: 40px;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .eyebrow::after {
+    content: "";
+    flex: 1 1 40px;
+    height: 1px;
+    background: var(--border-firm);
+  }
+  h1 {
+    font-family: var(--font-mono);
+    font-size: clamp(28px, 4.4vw, 42px);
+    line-height: 1.12;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    margin: 0 0 16px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 17px;
+    color: var(--text-2);
+    max-width: var(--measure);
+    margin: 0 0 26px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .chip {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    padding: 4px 9px;
+    border: 1px solid var(--border-firm);
+    border-radius: var(--radius);
+    color: var(--text-2);
+    background: var(--surface);
+    white-space: nowrap;
+  }
+  .chip b { color: var(--text); font-weight: 600; }
+
+  /* ── status panel ─────────────────────────────────────────────────────── */
+  .panel {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(178px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    margin: 0 0 14px;
+  }
+  .tile { background: var(--surface); padding: 15px 17px; }
+  .tile .k {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.11em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 7px;
+  }
+  .tile .v {
+    font-family: var(--font-mono);
+    font-size: 19px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+  .tile .sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-3);
+    margin-top: 4px;
+  }
+
+  /* state encoded in form, not only color */
+  .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    flex: 0 0 auto;
+    transform: translateY(-3px);
+  }
+  .dot.ok   { background: var(--pass); }
+  .dot.warn { background: var(--warn); }
+
+  .pill {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.05em;
+    padding: 2px 7px;
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    white-space: nowrap;
+  }
+  .pill.ok   { color: var(--pass); background: var(--pass-soft); }
+  .pill.warn { color: var(--warn); background: var(--warn-soft); }
+  .pill.bad  { color: var(--fail); background: var(--fail-soft); }
+
+  /* ── sections ─────────────────────────────────────────────────────────── */
+  section { margin-top: 60px; scroll-margin-top: 20px; }
+  h2 {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 6px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-firm);
+  }
+  h3 {
+    font-family: var(--font-mono);
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    margin: 34px 0 10px;
+    text-wrap: balance;
+  }
+  .lede {
+    font-size: 17px;
+    margin: 20px 0 0;
+    max-width: var(--measure);
+  }
+  p { margin: 14px 0; max-width: var(--measure); }
+  ul, ol { max-width: var(--measure); padding-left: 22px; }
+  li { margin: 7px 0; }
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, code:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  strong { font-weight: 650; }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.875em;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+
+  /* ── terminal / code blocks ───────────────────────────────────────────── */
+  .term {
+    background: var(--code-bg);
+    color: var(--code-text);
+    border: 1px solid var(--code-border);
+    border-radius: var(--radius);
+    margin: 18px 0;
+    overflow: hidden;
+  }
+  .term-bar {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--code-dim);
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--code-border);
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .term pre {
+    margin: 0;
+    padding: 14px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.62;
+    tab-size: 2;
+  }
+  .term .c  { color: var(--code-dim); }          /* comment */
+  .term .p  { color: #7fd6c6; }                  /* prompt / command */
+  .term .g  { color: #67d69f; }                  /* good */
+  .term .y  { color: #e3ac4d; }                  /* warning */
+  .term .r  { color: #f07878; }                  /* bad */
+
+  /* ── tables ───────────────────────────────────────────────────────────── */
+  .twrap { overflow-x: auto; margin: 20px 0; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    min-width: 480px;
+  }
+  th, td {
+    text-align: left;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  thead th {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    border-bottom: 1px solid var(--border-firm);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  td.mono, th.mono { font-family: var(--font-mono); font-size: 12.5px; }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  /* ── callout ──────────────────────────────────────────────────────────── */
+  .callout {
+    border: 1px solid var(--border-firm);
+    border-left: 3px solid var(--warn);
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 20px 22px;
+    margin: 24px 0;
+  }
+  .callout.grave { border-left-color: var(--fail); }
+  .callout .tag {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--warn);
+    margin-bottom: 9px;
+  }
+  .callout.grave .tag { color: var(--fail); }
+  .callout h3 { margin-top: 0; }
+  .callout > :last-child { margin-bottom: 0; }
+
+  /* ── diagram ──────────────────────────────────────────────────────────── */
+  figure { margin: 24px 0; }
+  .figframe {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    padding: 20px;
+    overflow-x: auto;
+  }
+  .figframe svg { display: block; min-width: 660px; width: 100%; height: auto; }
+  figcaption {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-3);
+    margin-top: 10px;
+    max-width: var(--measure);
+    line-height: 1.6;
+  }
+  /* SVG styling driven by tokens so both themes resolve */
+  .d-box  { fill: var(--surface-2); stroke: var(--border-firm); }
+  .d-zone { fill: none; stroke: var(--border); stroke-dasharray: 3 3; }
+  .d-acc  { fill: var(--accent-soft); stroke: var(--accent); }
+  .d-t    { fill: var(--text); font-family: var(--font-mono); font-size: 12px; }
+  .d-t2   { fill: var(--text-2); font-family: var(--font-mono); font-size: 10.5px; }
+  .d-t3   { fill: var(--text-3); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.1em; }
+  .d-line { stroke: var(--border-firm); fill: none; stroke-width: 1.4; }
+  .d-ok   { fill: var(--pass); font-family: var(--font-mono); font-size: 10.5px; }
+  .d-no   { fill: var(--fail); font-family: var(--font-mono); font-size: 10.5px; }
+
+  /* ── file tree ────────────────────────────────────────────────────────── */
+  .tree {
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.75;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 18px;
+    margin: 20px 0;
+    overflow-x: auto;
+  }
+  .tree .d { color: var(--accent); }
+  .tree .n { color: var(--text-3); }
+  .tree b  { font-weight: 600; }
+
+  footer {
+    margin-top: 72px;
+    padding-top: 22px;
+    border-top: 1px solid var(--border-firm);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-3);
+    max-width: var(--measure);
+    line-height: 1.7;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 620px) {
+    .wrap { padding: 0 18px 64px; }
+    header.masthead { padding-top: 36px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Deployed &amp; verified · k8s-ha · 2026-08-15</p>
+    <h1>Velero Backup Runbook</h1>
+    <p class="standfirst">
+      Velero installed on a two-node kubeadm cluster via the official Helm chart, with
+      in-cluster MinIO as the S3 target. One chart and one workflow that serve both this
+      local cluster and any managed cloud cluster. A namespace was destroyed and restored
+      to prove it.
+    </p>
+    <div class="chips">
+      <span class="chip">chart <b>vmware-tanzu/velero 12.1.0</b></span>
+      <span class="chip">velero <b>v1.18.1</b></span>
+      <span class="chip">plugin-for-aws <b>v1.14.2</b></span>
+      <span class="chip">uploader <b>Kopia</b></span>
+      <span class="chip">k8s <b>v1.36.3</b></span>
+      <span class="chip">ui <b>otwld/velero-ui 0.15.0</b></span>
+    </div>
+  </header>
+
+  <!-- ══ STATUS ══════════════════════════════════════════════════════════ -->
+  <div class="panel">
+    <div class="tile">
+      <div class="k">BackupStorageLocation</div>
+      <div class="v"><span class="dot ok"></span>Available</div>
+      <div class="sub">MinIO S3 auth OK</div>
+    </div>
+    <div class="tile">
+      <div class="k">node-agent</div>
+      <div class="v"><span class="dot ok"></span>2 / 2</div>
+      <div class="sub">incl. tainted control-plane</div>
+    </div>
+    <div class="tile">
+      <div class="k">Backup → restore</div>
+      <div class="v"><span class="dot ok"></span>Verified</div>
+      <div class="sub">namespace destroyed &amp; rebuilt</div>
+    </div>
+    <div class="tile">
+      <div class="k">Volume data integrity</div>
+      <div class="v"><span class="dot ok"></span>Identical</div>
+      <div class="sub">md5 match after restore</div>
+    </div>
+    <div class="tile">
+      <div class="k">Web UI</div>
+      <div class="v"><span class="dot ok"></span>:30902</div>
+      <div class="sub">RBAC de-escalated</div>
+    </div>
+    <div class="tile">
+      <div class="k">Deep test</div>
+      <div class="v"><span class="dot ok"></span>37 / 37</div>
+      <div class="sub">255 files sha256-matched</div>
+    </div>
+    <div class="tile">
+      <div class="k">Docs match reality</div>
+      <div class="v"><span class="dot ok"></span>109 / 109</div>
+      <div class="sub">audit-docs.sh, 0 failed</div>
+    </div>
+    <div class="tile">
+      <div class="k">Off-cluster copy</div>
+      <div class="v"><span class="dot warn"></span>None</div>
+      <div class="sub">lab target — see caveat</div>
+    </div>
+  </div>
+
+  <!-- ══ VERIFIED ════════════════════════════════════════════════════════ -->
+  <section id="verified">
+    <h2>The proof</h2>
+    <p class="lede">
+      Not a dry run. A demo app with a PVC, ConfigMap, Secret and Service was deployed,
+      real data written, the entire namespace deleted, then restored from object storage.
+    </p>
+
+    <div class="term">
+      <div class="term-bar"><span>./scripts/verify-backup-restore.sh</span><span>exit 0</span></div>
+<pre><span class="c">1/7</span>  Deploying demo app (PVC + ConfigMap + Secret + Service)
+<span class="c">2/7</span>  Writing known data into the PVC
+<span class="c">3/7</span>  Creating backup 'verify-smoke1'
+     Backup completed with status: <span class="g">Completed</span>
+<span class="c">4/7</span>  Verifying volume data was actually captured
+     PodVolumeBackups for this backup: <span class="g">1</span>
+     NAME                  STATUS      VOLUME   UPLOADER   BYTES
+     verify-smoke1-xlvtk   <span class="g">Completed</span>   data     kopia      102
+<span class="c">5/7</span>  <span class="y">DESTROYING namespace velero-demo</span>
+     namespace "velero-demo" deleted
+     gone.
+<span class="c">6/7</span>  Restoring from 'verify-smoke1'
+     Restore completed with status: <span class="g">Completed</span>
+<span class="c">7/7</span>  Byte-comparing restored volume data
+
+<span class="g">PASS: namespace destroyed and fully restored — volume data byte-identical,
+      nested files intact, ConfigMap/Secret/Service all present.</span></pre>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><span>md5 — before deletion vs after restore</span><span>match</span></div>
+<pre><span class="g">4ddf178d7b99e6e218338f8601a156e8</span>  original-marker.txt
+<span class="g">4ddf178d7b99e6e218338f8601a156e8</span>  restored-marker.txt</pre>
+    </div>
+
+    <p>
+      Nested directories, the ConfigMap, the Secret and the Service all returned. The
+      restored PVC bound to a <em>different</em> PV than the original — the old one is
+      left <code>Released</code> and never rebinds, which is why a PV recycler ships
+      alongside this.
+    </p>
+  </section>
+
+  <!-- ══ REBUILD ═════════════════════════════════════════════════════════ -->
+  <section id="rebuild">
+    <h2>Destroyed and rebuilt from zero</h2>
+    <p class="lede">
+      The whole stack was then torn down to an empty cluster and rebuilt with one command —
+      the only way to know the instructions are actually correct.
+    </p>
+
+    <div class="term">
+      <div class="term-bar"><span>after ./scripts/uninstall-local.sh --purge-all</span><span>empty cluster</span></div>
+<pre><span class="p">kubectl</span> get sc                     → <span class="c">No resources found</span>
+<span class="p">kubectl</span> get pv                     → <span class="c">No resources found</span>
+<span class="p">kubectl</span> get crd | grep velero.io   → <span class="c">(nothing)</span>
+<span class="p">kubectl</span> get ns                     → <span class="c">no velero, minio, velero-ui, local-path-storage</span></pre>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><span>./scripts/install-all.sh</span><span>one command</span></div>
+<pre><span class="c">╔══ STAGE 1-3  storage, MinIO, Velero</span>
+    local-path-provisioner rolled out
+    local-static PV pool ready (4 volumes)
+    bucket 'velero' ready
+    BackupStorageLocation phase=<span class="g">Available</span>
+
+<span class="c">╔══ STAGE 4  end-to-end verification</span>
+    backup verify-201044 → <span class="g">Completed</span>
+    PodVolumeBackups: <span class="g">1</span>   (Completed · data · kopia · 70 bytes)
+    <span class="y">DESTROYING namespace velero-demo</span> → deleted
+    restore verify-restore-201044 → <span class="g">Completed</span>
+    <span class="g">PASS: volume data byte-identical, nested files intact,
+          ConfigMap/Secret/Service all present</span>
+
+<span class="c">╔══ STAGE 5  web UI</span>
+    ClusterRoleBinding velero-ui -> <span class="g">velero-ui</span>   <span class="c"># not cluster-admin</span>
+    login OK, JWT issued
+    /api/backups  1    /api/restores  1    /api/bsl  1
+
+<span class="c">╔══</span> <span class="g">ALL DONE in 249s</span></pre>
+    </div>
+
+    <p>
+      <strong>Four minutes nine seconds</strong>, empty cluster to a backup system with a
+      proven restore. The destroy/restore test and the RBAC check run <em>inside</em> the
+      install, so a broken rebuild fails loudly instead of quietly finishing. The cycle has
+      since been repeated twice more — <strong>190s</strong> and <strong>183s</strong> — both
+      passing.
+    </p>
+
+    <h3>The deep test — 37 assertions</h3>
+    <p>
+      The 2-minute smoke test asks <em>“did anything come back?”</em>. This one asks
+      <em>“did <strong>everything</strong> come back, byte for byte?”</em> — over a data tree
+      built to break filesystem backup.
+    </p>
+    <div class="term">
+      <div class="term-bar"><span>./scripts/deep-test.sh</span><span>37 passed · 0 failed</span></div>
+<pre><span class="c">━━ fixture:</span> 250 small files in nested dirs · 8 MB random binary
+           <span class="c">файл-测试.txt</span> · <span class="c">"name with spaces.txt"</span> · chmod 600/755
+           empty dir · symlink   → <span class="g">sha256 of every file recorded</span>
+
+<span class="c">━━ T06-T10  backup, capture, dedup, TTL</span>
+  <span class="g">✅</span> zero warnings · one PodVolumeBackup · <span class="g">8,395,536 bytes</span> uploaded
+  <span class="g">✅</span> dedup proven: 2nd backup added <span class="g">14</span> objects vs <span class="g">21</span> for the 1st
+  <span class="g">✅</span> TTL lands ~168h out
+
+<span class="c">━━ T11-T19  destroy the namespace, rebuild from object storage</span>
+  <span class="g">✅</span> every file byte-identical            <span class="g">255 files, sha256 match</span>
+  <span class="g">✅</span> permissions + tree preserved         identical
+  <span class="g">✅</span> unicode + space filenames restored
+  <span class="g">✅</span> 8 MB binary checksum matches
+  <span class="g">✅</span> Service got a <em>fresh</em> clusterIP      10.96.203.51 → 10.99.20.19
+
+<span class="c">━━ T20-T21  relocation &amp; selectivity</span>
+  <span class="g">✅</span> restored into a DIFFERENT namespace  255 files identical
+  <span class="g">✅</span> selective restore excluded PVC + Deployment
+
+<span class="c">━━ T22  NEGATIVE — the trap must still behave as documented</span>
+  <span class="g">✅</span> hostPath backup still reports        <span class="y">Completed</span>
+  <span class="g">✅</span> hostPath produced <span class="y">NO</span> PodVolumeBackup   0
+  <span class="g">✅</span> …but it did raise a warning          1   <span class="c">← the only signal</span>
+
+<span class="c">━━ T23-T25  lifecycle &amp; observability</span>
+  <span class="g">✅</span> restore over a live namespace = no-op
+  <span class="g">✅</span> schedule fires · metrics counting
+  <span class="g">✅</span> backup delete freed bucket objects   85 → 79
+
+<span class="c">════</span> <span class="g">37 passed · 0 failed · 0 informational</span> <span class="c">════</span>
+<span class="g">DEEP TEST PASSED — backups are trustworthy on this cluster.</span></pre>
+    </div>
+    <div class="callout">
+      <div class="tag">Why the negative test is the valuable one</div>
+      <p>
+        T22 deliberately puts a PVC on the <em>wrong</em> StorageClass and asserts Velero
+        <strong>still silently skips it</strong>. If that test ever starts failing, that is
+        news rather than a bug — Velero's behaviour changed and the storage guidance in the
+        docs needs revisiting. A test suite that only proves the happy path cannot tell you
+        that.
+      </p>
+    </div>
+
+    <h3>And the docs are asserted, not assumed</h3>
+    <p>
+      A document that drifts from the system is worse than no document. So every concrete
+      claim across these pages is machine-checked against the repo files <em>and</em> the
+      running cluster.
+    </p>
+    <div class="term">
+      <div class="term-bar"><span>./scripts/audit-docs.sh</span><span>109 checks</span></div>
+<pre><span class="c">══ 3. Pinned versions in files match the source of truth</span>
+  <span class="g">✅</span> velero chart / ui chart / plugin / minio / mc / local-path
+  <span class="g">✅</span> no ':latest' image tags anywhere              0
+<span class="c">══ 5. Stale version strings</span>            <span class="g">✅</span> clean
+<span class="c">══ 7. LIVE: deployed versions</span>            <span class="g">✅</span> 9/9 match
+<span class="c">══ 8. LIVE: BackupStorageLocation</span>        <span class="g">✅</span> phase, bucket, region,
+                                            s3ForcePathStyle, s3Url, publicUrl
+<span class="c">══ 9. LIVE: server flags</span>                 <span class="g">✅</span> kopia, fs-backup, ttl=168h
+                                         <span class="g">✅</span> VolumeSnapshotLocations = 0
+<span class="c">══ 10. LIVE: node-agent</span>                  <span class="g">✅</span> 2/2 nodes + cp toleration
+<span class="c">══ 11. LIVE: storage &amp; ports</span>            <span class="g">✅</span> 3 SCs, 4 PVs, 30900/30901
+<span class="c">══ 12. LIVE: UI security</span>                <span class="g">✅</span> NOT cluster-admin, creds
+                                            from Secret, port 30902
+
+<span class="c">════</span> <span class="g">AUDIT RESULT: 109 passed, 0 failed</span> <span class="c">════</span>
+<span class="g">Documentation matches reality.</span></pre>
+    </div>
+    <p>
+      It exits non-zero on any mismatch, so a version bump that updates the config but not
+      the prose fails the check. Run it with <code>--static</code> to audit the files with no
+      cluster at all.
+    </p>
+
+    <div class="callout">
+      <div class="tag">Found by actually running the teardown</div>
+      <h3>Deleting Velero's CRDs by hand deadlocks forever.</h3>
+      <p>
+        Velero puts finalizers on its own objects
+        (<code>restores.velero.io/external-resources-finalizer</code>), and <em>only the
+        Velero controller removes them</em> — which <code>helm uninstall</code> already
+        deleted. Deleting the CRDs then makes Kubernetes wait forever on custom resources
+        nothing is left to finalize, and <code>kubectl delete crd --wait</code> hangs.
+      </p>
+      <div class="term">
+        <div class="term-bar"><span>the symptom</span><span>stuck</span></div>
+<pre><span class="p">kubectl</span> get crd | grep velero.io
+<span class="y">restores.velero.io    2026-08-14T19:16:06Z</span>   <span class="c"># Terminating, forever</span></pre>
+      </div>
+      <p>
+        Fix: strip the finalizers <em>before</em> deleting the CRDs.
+        <code>uninstall-local.sh</code> now does this for every Velero resource type and
+        deletes CRDs with <code>--wait=false</code> plus a bounded timeout, so it cannot hang
+        again. This is the reason to use the script rather than hand-rolling a teardown.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ ARCHITECTURE ════════════════════════════════════════════════════ -->
+  <section id="architecture">
+    <h2>Architecture</h2>
+    <p class="lede">
+      Two facts explain every failure mode: <strong>velero</strong> backs up API objects,
+      <strong>node-agent</strong> backs up file data. They write to the same bucket over
+      two independent paths.
+    </p>
+
+    <figure>
+      <div class="figframe">
+        <svg viewBox="0 0 860 560" role="img" aria-labelledby="dtitle">
+          <title id="dtitle">Velero deployment topology on the k8s-ha cluster</title>
+
+          <!-- workstation -->
+          <rect class="d-box" x="20" y="16" width="380" height="72" rx="4"/>
+          <text class="d-t3" x="34" y="36">WORKSTATION · 192.168.56.133</text>
+          <text class="d-t" x="34" y="60">kubectl</text>
+          <text class="d-t" x="112" y="60">helm</text>
+          <text class="d-t" x="175" y="60">velero</text>
+          <text class="d-t2" x="34" y="78">not a cluster node — client access only</text>
+
+          <!-- arrows down from workstation -->
+          <path class="d-line" d="M90 88 L90 132" marker-end="url(#ar)"/>
+          <text class="d-t2" x="98" y="114">kube-api :6443</text>
+          <path class="d-line" d="M300 88 L300 396" marker-end="url(#ar)"/>
+          <text class="d-t2" x="308" y="112">publicUrl → :30900</text>
+          <text class="d-t2" x="308" y="126">(CLI reads logs from S3)</text>
+
+          <!-- velero namespace zone -->
+          <rect class="d-zone" x="20" y="132" width="500" height="176" rx="4"/>
+          <text class="d-t3" x="34" y="152">NAMESPACE / VELERO</text>
+
+          <rect class="d-box" x="36" y="164" width="216" height="126" rx="4"/>
+          <text class="d-t" x="50" y="186">velero</text>
+          <text class="d-t2" x="50" y="204">Deployment · 1 replica</text>
+          <text class="d-t2" x="50" y="222">walks the API, writes</text>
+          <text class="d-t2" x="50" y="236">object metadata</text>
+          <rect class="d-acc" x="50" y="248" width="188" height="30" rx="3"/>
+          <text class="d-t2" x="60" y="268">initContainer: plugin-for-aws</text>
+
+          <rect class="d-box" x="272" y="164" width="232" height="126" rx="4"/>
+          <text class="d-t" x="286" y="186">node-agent</text>
+          <text class="d-t2" x="286" y="204">DaemonSet · 2 / 2 nodes</text>
+          <text class="d-t2" x="286" y="222">reads /var/lib/kubelet/pods,</text>
+          <text class="d-t2" x="286" y="236">streams data via Kopia</text>
+          <text class="d-ok" x="286" y="258">✓ k8s-w-0</text>
+          <text class="d-ok" x="286" y="274">✓ k8s-cp-0 (taint tolerated)</text>
+
+          <!-- arrow to minio -->
+          <path class="d-line" d="M180 308 L180 396" marker-end="url(#ar)"/>
+          <text class="d-t2" x="190" y="342">S3 API · s3Url =</text>
+          <text class="d-t2" x="190" y="356">minio.minio.svc:9000</text>
+
+          <!-- minio zone -->
+          <rect class="d-zone" x="20" y="396" width="500" height="132" rx="4"/>
+          <text class="d-t3" x="34" y="416">NAMESPACE / MINIO</text>
+          <rect class="d-box" x="36" y="428" width="468" height="84" rx="4"/>
+          <text class="d-t" x="50" y="450">MinIO — S3-compatible object storage</text>
+          <text class="d-t2" x="50" y="470">bucket: velero    ·    backups/ = objects    ·    kopia/ = file data</text>
+          <text class="d-t2" x="50" y="492">PVC 20Gi on local-path-retain (reclaimPolicy: Retain)</text>
+
+          <!-- storage sidebar -->
+          <rect class="d-zone" x="544" y="132" width="296" height="396" rx="4"/>
+          <text class="d-t3" x="558" y="152">WORKLOAD STORAGE</text>
+
+          <rect class="d-box" x="560" y="168" width="264" height="104" rx="4"/>
+          <text class="d-t" x="574" y="190">local-path</text>
+          <text class="d-t2" x="574" y="208">the cluster default</text>
+          <text class="d-t2" x="574" y="226">provisions hostPath PVs</text>
+          <text class="d-no" x="574" y="250">✗ fs-backup SKIPS these</text>
+          <text class="d-t2" x="574" y="264">— silently, backup says Completed</text>
+
+          <rect class="d-box" x="560" y="288" width="264" height="104" rx="4"/>
+          <text class="d-t" x="574" y="310">local-static</text>
+          <text class="d-t2" x="574" y="328">pre-created pool of 4</text>
+          <text class="d-t2" x="574" y="346">provisions local PVs</text>
+          <text class="d-ok" x="574" y="370">✓ fs-backup reads these</text>
+          <text class="d-t2" x="574" y="384">— use for data that must survive</text>
+
+          <rect class="d-box" x="560" y="408" width="264" height="104" rx="4"/>
+          <text class="d-t" x="574" y="430">on a cloud cluster</text>
+          <text class="d-t2" x="574" y="450">CSI driver + snapshot class</text>
+          <text class="d-t2" x="574" y="468">+ snapshotMoveData: true</text>
+          <text class="d-ok" x="574" y="492">✓ fast AND portable</text>
+          <text class="d-t2" x="574" y="506">none of the above applies</text>
+
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5"
+                    markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--border-firm)"/>
+            </marker>
+          </defs>
+        </svg>
+      </div>
+      <figcaption>
+        On a cloud cluster the MinIO box becomes S3 / GCS / Blob and node-agent uses CSI
+        snapshots with data movement instead of fs-backup. Nothing else in this picture changes.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ══ THE TRAP ════════════════════════════════════════════════════════ -->
+  <section id="trap">
+    <h2>The trap that will bite you</h2>
+
+    <div class="callout grave">
+      <div class="tag">Encountered on the first attempt</div>
+      <h3>A backup can report <code>Completed</code> and contain none of your data.</h3>
+      <p>
+        The first backup here said <code>Completed</code>, 24 items. The PVC contents were
+        never captured. Restoring it would have produced a healthy-looking pod with an empty
+        volume — the worst failure mode there is, because it looks like success.
+      </p>
+    </div>
+
+    <div class="term">
+      <div class="term-bar"><span>velero backup logs demo-backup-1</span><span>buried in the log</span></div>
+<pre><span class="y">level=warning msg="Volume data in pod velero-demo/demo-app-… is a hostPath
+volume which is not supported for pod volume backup, skipping"</span></pre>
+    </div>
+
+    <p>
+      <code>local-path-provisioner</code> provisions PVs with a <code>hostPath</code> volume
+      source, and Velero's file-system backup refuses those outright. The Kubernetes objects
+      were saved; the data was not.
+    </p>
+
+    <h3>The cheapest signal</h3>
+    <p>
+      The <code>WARNINGS</code> column. Both backups below are <code>Completed</code>; only
+      one contains volume data.
+    </p>
+
+    <div class="twrap">
+      <table>
+        <thead>
+          <tr><th class="mono">NAME</th><th class="mono">STATUS</th><th class="mono">ERRORS</th><th class="mono">WARNINGS</th><th>Reality</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">demo-backup-1</td>
+            <td class="mono">Completed</td>
+            <td class="mono num">0</td>
+            <td class="mono num">1</td>
+            <td><span class="pill bad">no volume data</span></td>
+          </tr>
+          <tr>
+            <td class="mono">demo-backup-2</td>
+            <td class="mono">Completed</td>
+            <td class="mono num">0</td>
+            <td class="mono num">0</td>
+            <td><span class="pill ok">volume backed up</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Always verify this way</h3>
+    <div class="term">
+      <div class="term-bar"><span>the check that actually matters</span><span>bash</span></div>
+<pre><span class="c"># ZERO PodVolumeBackups = no volume data in that backup, full stop.</span>
+<span class="p">kubectl</span> -n velero get podvolumebackups -l velero.io/backup-name=&lt;BACKUP&gt;
+
+<span class="c"># Or read it off the backup itself:</span>
+<span class="p">velero</span> backup describe &lt;BACKUP&gt; --details | sed -n '/Backup Volumes/,$p'</pre>
+    </div>
+
+    <p>
+      <strong>The fix on this cluster:</strong> put anything whose data must survive on the
+      <code>local-static</code> StorageClass, not the default <code>local-path</code>.
+      On a cloud cluster the trap does not apply — use CSI snapshots.
+    </p>
+  </section>
+
+  <!-- ══ WHY THIS SHAPE ══════════════════════════════════════════════════ -->
+  <section id="findings">
+    <h2>Why it is configured this way</h2>
+    <p class="lede">
+      The cluster was surveyed before anything was installed. Three findings dictated every
+      choice — this is not a copied tutorial config.
+    </p>
+
+    <div class="twrap">
+      <table>
+        <thead>
+          <tr><th>Finding</th><th>Consequence</th><th class="mono">Setting</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>No StorageClass at all — <code>kubectl get sc</code> returned nothing, and 4 PVCs sat <code>Pending</code></td>
+            <td>MinIO could not get a volume. Installed local-path-provisioner as the default; it also unblocked the stuck monitoring PVCs</td>
+            <td class="mono">local-path (default)</td>
+          </tr>
+          <tr>
+            <td>No CSI snapshot support — no <code>snapshot.storage.k8s.io</code> CRDs, only Calico's ephemeral driver</td>
+            <td>Volume data must be copied over the filesystem. A VolumeSnapshotLocation would never validate</td>
+            <td class="mono">snapshotsEnabled: false<br>defaultVolumesToFsBackup: true</td>
+          </tr>
+          <tr>
+            <td>Control-plane node carries <code>NoSchedule</code></td>
+            <td>The DaemonSet would skip that node, silently losing volume data for any pod on it</td>
+            <td class="mono">nodeAgent.tolerations</td>
+          </tr>
+          <tr>
+            <td>CLI runs off-cluster, cannot resolve cluster DNS</td>
+            <td><code>velero backup logs</code> failed even on successful backups — the CLI reads straight from object storage</td>
+            <td class="mono">config.publicUrl</td>
+          </tr>
+          <tr>
+            <td>Helm values land in release history in etcd, in plaintext</td>
+            <td>No credential appears in any values file; Secrets are created out of band</td>
+            <td class="mono">credentials.existingSecret</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══ QUICKSTART ══════════════════════════════════════════════════════ -->
+  <section id="quickstart">
+    <h2>Quick start</h2>
+
+    <h3>Local / on-prem</h3>
+    <div class="term">
+      <div class="term-bar"><span>storage → MinIO → Velero → test → UI</span><span>bash</span></div>
+<pre><span class="p">./scripts/install-all.sh</span>
+<span class="c"># everything, and it fails loudly at any stage that does not verify</span>
+
+<span class="c"># or step by step:</span>
+<span class="p">./scripts/install-local.sh</span>            <span class="c"># storage + MinIO + Velero</span>
+<span class="p">./scripts/verify-backup-restore.sh</span>    <span class="c"># destroy + restore + byte-compare</span>
+<span class="p">./scripts/install-ui.sh</span>               <span class="c"># web dashboard</span>
+
+<span class="c"># teardown, three levels:</span>
+<span class="p">./scripts/uninstall-local.sh</span>              <span class="c"># keep all backup data</span>
+<span class="p">./scripts/uninstall-local.sh</span> --purge-data <span class="c"># delete backups + wipe node dirs</span>
+<span class="p">./scripts/uninstall-local.sh</span> --purge-all  <span class="c"># also remove the StorageClass</span></pre>
+    </div>
+    <p>
+      Every step is in <code>docs/00-walkthrough.md</code> — each command, the output to
+      expect, and what it means, from an empty cluster through backup, restore, schedules,
+      the UI, teardown and rebuild.
+    </p>
+
+    <h3>Any cloud cluster</h3>
+    <div class="term">
+      <div class="term-bar"><span>bucket → secret → install</span><span>bash</span></div>
+<pre><span class="c"># 1. create the bucket yourself — Velero never creates it</span>
+
+<span class="c"># 2. credentials as a Secret, never in a values file</span>
+<span class="p">kubectl</span> create namespace velero
+<span class="p">kubectl</span> -n velero create secret generic velero-s3-credentials \
+  --from-literal=cloud='[default]
+aws_access_key_id=&lt;KEY&gt;
+aws_secret_access_key=&lt;SECRET&gt;
+'
+
+<span class="c"># 3. replace every &lt;PLACEHOLDER&gt; in the values file, then install</span>
+<span class="p">helm</span> repo add vmware-tanzu https://vmware-tanzu.github.io/helm-charts
+<span class="p">helm</span> upgrade --install velero vmware-tanzu/velero \
+  --version 12.1.0 -n velero --create-namespace \
+  -f values/values-s3-generic.yaml --wait
+
+<span class="p">kubectl</span> -n velero get backupstoragelocation   <span class="c"># must be Available</span></pre>
+    </div>
+  </section>
+
+  <!-- ══ LOCAL VS CLOUD ══════════════════════════════════════════════════ -->
+  <section id="cloud">
+    <h2>Local vs cloud — what actually differs</h2>
+    <p class="lede">
+      Same chart, same commands, same runbook. Only the target and the volume strategy change.
+    </p>
+    <div class="twrap">
+      <table>
+        <thead>
+          <tr><th></th><th>Local (deployed here)</th><th>Cloud</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Object storage</td><td class="mono">MinIO, in-cluster</td><td class="mono">S3 / GCS / Blob / Spaces</td></tr>
+          <tr><td>Plugin</td><td class="mono">plugin-for-aws</td><td class="mono">matching cloud plugin</td></tr>
+          <tr><td>Volume data</td><td class="mono">Kopia fs-backup</td><td class="mono">CSI snapshot + data movement</td></tr>
+          <tr><td>snapshotsEnabled</td><td class="mono">false</td><td class="mono">true</td></tr>
+          <tr><td>features</td><td class="mono">—</td><td class="mono">EnableCSI</td></tr>
+          <tr><td>defaultSnapshotMoveData</td><td class="mono">—</td><td class="mono">true</td></tr>
+          <tr><td>Credentials</td><td class="mono">generated keys in a Secret</td><td class="mono">IRSA / Workload Identity</td></tr>
+          <tr><td>s3ForcePathStyle</td><td class="mono">"true"</td><td class="mono">"true" for third parties;<br><strong>omit for real AWS S3</strong></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout">
+      <div class="tag">Most common cloud mistake</div>
+      <p>
+        Velero ignores an <strong>unlabelled</strong> VolumeSnapshotClass and silently takes
+        no snapshot at all. The label is mandatory:
+      </p>
+      <div class="term">
+        <div class="term-bar"><span>required label</span><span>bash</span></div>
+<pre><span class="p">kubectl</span> label volumesnapshotclass &lt;name&gt; \
+  velero.io/csi-volumesnapshot-class=true</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ REPO ════════════════════════════════════════════════════════════ -->
+  <section id="repo">
+    <h2>What ships in the repo</h2>
+    <div class="tree">
+<span class="d">values/</span>
+  <b>values-local.yaml</b>        <span class="n">← deployed here · MinIO target, Kopia fs-backup</span>
+  <b>values-s3-generic.yaml</b>   <span class="n">any S3 store · DO Spaces, Ceph, R2, Wasabi, B2</span>
+  <b>values-aws.yaml</b>          <span class="n">S3 + EBS CSI · IRSA setup, full IAM policy</span>
+  <b>values-gcp.yaml</b>          <span class="n">GCS + PD CSI · Workload Identity</span>
+  <b>values-azure.yaml</b>        <span class="n">Blob + Disk CSI · Workload Identity</span>
+  <b>values-velero-ui.yaml</b>    <span class="n">← deployed · web UI, RBAC de-escalated</span>
+<span class="d">manifests/</span>
+  <b>local-path-provisioner.yaml</b> <span class="n">default StorageClass (cluster had none)</span>
+  <b>local-static-storage.yaml</b>   <span class="n">local PVs that fs-backup can actually read</span>
+  <b>minio.yaml</b>                  <span class="n">S3 backend + bucket-creation Job</span>
+  <b>velero-ui-nodeport.yaml</b>     <span class="n">UI access · chart can't pin a nodePort</span>
+<span class="d">scripts/</span>
+  <b>install-all.sh</b>           <span class="n">ONE COMMAND: storage → MinIO → Velero → test → UI</span>
+  <b>install-local.sh</b>         <span class="n">storage + MinIO + Velero, idempotent</span>
+  <b>install-ui.sh</b>            <span class="n">web UI, both unsafe defaults corrected</span>
+  <b>gen-credentials.sh</b>       <span class="n">40-char random creds → both Secrets</span>
+  <b>gen-ui-credentials.sh</b>    <span class="n">UI password + JWT passphrase</span>
+  <b>verify-backup-restore.sh</b> <span class="n">quick: destroy + restore + byte-compare</span>
+  <b>deep-test.sh</b>             <span class="n">thorough: 37 assertions, 255-file manifest</span>
+  <b>recycle-local-pvs.sh</b>     <span class="n">return Released PVs to the pool</span>
+  <b>audit-docs.sh</b>            <span class="n">109 checks: do the docs still match reality?</span>
+  <b>uninstall-local.sh</b>       <span class="n">teardown; keeps data unless --purge-data</span>
+<b>CLAUDE.md</b>                  <span class="n">cluster constraints, decisions, every trap hit</span>
+<span class="d">docs/</span>
+  <b>00-walkthrough.md</b>        <span class="n">← START HERE · every command, expected output</span>
+  <b>01-architecture.md</b>       <span class="n">components, backup &amp; restore data paths</span>
+  <b>02-local-cluster.md</b>      <span class="n">the storage problem in full, every value explained</span>
+  <b>03-cloud-clusters.md</b>     <span class="n">S3 deep dive, AWS/GCP/Azure, CSI snapshots</span>
+  <b>04-operations.md</b>         <span class="n">schedules, retention, hooks, DR runbook</span>
+  <b>05-troubleshooting.md</b>    <span class="n">every failure mode hit while building this</span>
+  <b>06-production-notes.md</b>   <span class="n">what to change before trusting it</span>
+  <b>07-web-ui.md</b>             <span class="n">UI options + the two chart defaults fixed</span>
+  <b>08-deep-test.md</b>          <span class="n">the 37-assertion suite, what each group proves</span>
+    </div>
+  </section>
+
+  <!-- ══ COMMANDS ════════════════════════════════════════════════════════ -->
+  <section id="commands">
+    <h2>Everyday commands</h2>
+    <div class="term">
+      <div class="term-bar"><span>backup · restore · schedule · health</span><span>bash</span></div>
+<pre><span class="c">── backup ──────────────────────────────────────────────────</span>
+<span class="p">velero</span> backup create &lt;name&gt; --include-namespaces app1,app2 --wait
+<span class="p">velero</span> backup describe &lt;name&gt; --details
+<span class="p">velero</span> backup logs &lt;name&gt;
+
+<span class="c">── restore ─────────────────────────────────────────────────</span>
+<span class="p">velero</span> restore create --from-backup &lt;name&gt; --wait
+<span class="c"># the safe way to test a restore — into a different namespace</span>
+<span class="p">velero</span> restore create --from-backup &lt;name&gt; \
+  --namespace-mappings prod:prod-restore-test --wait
+
+<span class="c">── schedules ───────────────────────────────────────────────</span>
+<span class="p">velero</span> schedule create daily --schedule="0 2 * * *" \
+  --exclude-namespaces kube-system,velero,minio --ttl 336h
+<span class="c"># cron runs in the pod's timezone — UTC. 02:00 UTC = 07:30 IST.</span>
+
+<span class="c">── health ──────────────────────────────────────────────────</span>
+<span class="p">kubectl</span> -n velero get backupstoragelocation   <span class="c"># must be Available</span>
+<span class="p">kubectl</span> -n velero get podvolumebackups        <span class="c"># volume data present?</span>
+<span class="p">kubectl</span> -n velero logs deploy/velero --tail=100</pre>
+    </div>
+
+    <div class="callout">
+      <div class="tag">Retention</div>
+      <p>
+        Never remove a backup with <code>kubectl delete backup</code> — that orphans its data
+        in the bucket forever with nothing referencing it. Always
+        <code>velero backup delete &lt;name&gt; --confirm</code>.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ WEB UI ══════════════════════════════════════════════════════════ -->
+  <section id="ui">
+    <h2>Web UI</h2>
+    <p class="lede">
+      Velero ships <strong>no official UI</strong> — it is CLI and CRDs by design. The most
+      actively maintained community dashboard, <code>otwld/velero-ui</code>, is deployed at
+      <strong>http://192.168.56.134:30902</strong>. Two of its chart defaults are dangerous
+      and were changed.
+    </p>
+
+    <div class="callout grave">
+      <div class="tag">Chart default 1 · privilege escalation</div>
+      <h3><code>rbac.clusterAdministrator: true</code> binds <code>cluster-admin</code>.</h3>
+      <p>
+        The chart's default binds Kubernetes' built-in <code>cluster-admin</code> role to the
+        UI's ServiceAccount. Combined with its other default of <code>admin</code>/<code>admin</code>,
+        a stock install hands full cluster control to anyone who can reach the Service.
+      </p>
+      <p>
+        Set to <code>false</code>, which switches to the chart's own purpose-built ClusterRole:
+        <code>velero.io/*</code>, <code>namespaces</code> get/list, and health URLs — nothing else.
+      </p>
+      <div class="term">
+        <div class="term-bar"><span>verify what it actually bound</span><span>bash</span></div>
+<pre><span class="p">kubectl</span> get clusterrolebinding velero-ui -o jsonpath='{.roleRef.name}'
+<span class="g">velero-ui</span>   <span class="c"># ✓ not cluster-admin</span></pre>
+      </div>
+    </div>
+
+    <div class="callout grave">
+      <div class="tag">Chart default 2 · forgeable sessions</div>
+      <h3>The JWT passphrase cannot be set through the chart at all.</h3>
+      <p>
+        <code>AUTH_SECRET_PASSPHRASE</code> defaults to the published string
+        <em>“this is not a secret passphrase”</em>. Left alone, anyone can forge a valid
+        session token and <strong>skip the login entirely</strong>.
+      </p>
+      <p>
+        The chart creates a Secret from <code>secretPassPhrase.value</code> but
+        <strong>never references it in the Deployment</strong> — so that value silently does
+        nothing. Both the password and the passphrase are injected directly instead, from a
+        Secret built by <code>scripts/gen-ui-credentials.sh</code>.
+      </p>
+    </div>
+
+    <h3>Verified against the CLI</h3>
+    <div class="term">
+      <div class="term-bar"><span>UI API vs velero CLI</span><span>all match</span></div>
+<pre>login, generated password          → <span class="g">200, JWT issued</span>
+login, admin/admin                 → <span class="g">rejected</span>
+
+GET /api/backups                   → 2    <span class="c">(CLI: 2)</span>  <span class="g">✓</span>
+GET /api/restores                  → 2    <span class="c">(CLI: 2)</span>  <span class="g">✓</span>
+GET /api/backup-storage-locations  → 1    <span class="c">(CLI: 1)</span>  <span class="g">✓</span>
+GET /api/pod-volume-backups        → 2                <span class="g">✓</span></pre>
+    </div>
+
+    <div class="callout">
+      <div class="tag">What no dashboard can tell you</div>
+      <p>
+        The UI reports Velero's own state faithfully — and inherits its blind spot. A backup
+        that silently skipped your volume data still shows as <code>Completed</code> in every
+        dashboard. That only surfaces in <code>velero backup logs</code> and the
+        PodVolumeBackup count. <strong>Green in a UI is not evidence your data is
+        recoverable</strong>; keep running the verify script.
+      </p>
+      <p>
+        Also worth knowing: UI access is effectively read access to Secrets in the
+        <code>velero</code> namespace — which includes your object-storage keys. That is
+        inherent to showing backup detail, not something RBAC can remove. And it is plain
+        HTTP, so the password and every JWT cross the LAN in the clear.
+      </p>
+    </div>
+  </section>
+
+  <!-- ══ CAVEAT ══════════════════════════════════════════════════════════ -->
+  <section id="caveat">
+    <h2>The one caveat</h2>
+
+    <div class="callout">
+      <div class="tag">Read before trusting this with real data</div>
+      <h3>Backups currently live on the disk of the cluster they protect.</h3>
+      <p>
+        MinIO stores every backup on <code>k8s-w-0</code>'s local disk, inside the cluster
+        being backed up. That protects you against an accidental
+        <code>kubectl delete namespace</code>, a bad deploy, or a lost PVC — genuinely
+        useful, and the Velero configuration itself is production-shaped.
+      </p>
+      <p>
+        It does <strong>not</strong> protect against losing that disk, the node, or the
+        cluster. A backup on the same disk as the thing it protects is an undo button, not
+        disaster recovery.
+      </p>
+      <p>
+        The fix is four lines — point the BackupStorageLocation at external object storage
+        with <code>values-s3-generic.yaml</code>, and enable bucket versioning plus object
+        lock. Full checklist in <code>docs/06-production-notes.md</code>.
+      </p>
+    </div>
+
+    <h3>Also worth doing before production</h3>
+    <ul>
+      <li>MinIO serves <strong>plain HTTP</strong> — S3 keys cross the LAN in the clear. Add TLS, and remove or firewall the NodePort.</li>
+      <li>Swap MinIO root credentials for a user scoped to the <code>velero</code> bucket.</li>
+      <li>Alert on <code>velero_backup_last_successful_timestamp</code> going <em>stale</em> — that catches a silently broken schedule, which no failure counter will.</li>
+      <li>Replace the static PV pool with a real CSI driver (Longhorn, OpenEBS LVM/ZFS, Ceph/Rook) for dynamic provisioning and genuine snapshots.</li>
+      <li>Rehearse restores on a schedule. An untested backup is a hypothesis.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Deployed to k8s-ha (192.168.56.134) on 2026-08-15 · chart vmware-tanzu/velero 12.1.0 ·
+    Velero v1.18.1 · plugin-for-aws v1.14.2 · Kopia uploader.<br>
+    Every version pinned, no <code>latest</code> tags. Credentials generated at install time,
+    stored mode 0600, gitignored, and absent from all values files.
+  </footer>
+
+</div>

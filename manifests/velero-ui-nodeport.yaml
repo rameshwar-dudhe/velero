@@ -1,0 +1,35 @@
+---
+# =============================================================================
+# External access to Velero UI.
+#
+# The otwld/velero-ui chart's Service template exposes only `type` and `port` —
+# there is no `nodePort` field — so a NodePort cannot be pinned through values.
+# This Service selects the same pods and pins the port.
+#
+#   http://192.168.56.134:30902   (or any node IP)
+#
+# SECURITY: this is plain HTTP on your LAN, fronting a UI that can delete every
+# backup in the cluster. Fine for a lab on a trusted network. For anything real,
+# delete this Service and use the Ingress block in values/values-velero-ui.yaml
+# with TLS instead.
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: velero-ui-nodeport
+  namespace: velero-ui
+  labels:
+    app.kubernetes.io/name: velero-ui
+    app.kubernetes.io/part-of: velero-backup
+spec:
+  type: NodePort
+  selector:
+    # Must match the chart's selectorLabels. Verify after a chart upgrade with:
+    #   kubectl -n velero-ui get svc velero-ui -o jsonpath='{.spec.selector}'
+    app.kubernetes.io/name: velero-ui
+    app.kubernetes.io/instance: velero-ui
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      nodePort: 30902

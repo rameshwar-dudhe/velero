@@ -1,0 +1,134 @@
+# =============================================================================
+# Velero UI — community web dashboard for Velero
+# Chart: otwld/velero-ui 0.15.0   |   App: 0.10.2
+# =============================================================================
+# There is NO official Velero UI. This is the most actively maintained community
+# project (Apache-2.0). It is a read/write control plane for Velero: it can
+# create backups, trigger restores, and DELETE backups. Treat it accordingly.
+#
+# Credentials come from the Secret velero-ui/velero-ui-auth, created by
+# scripts/gen-ui-credentials.sh. Nothing sensitive is in this file.
+#
+# Access: http://192.168.56.134:30902  (manifests/velero-ui-nodeport.yaml)
+# =============================================================================
+
+replicaCount: 1
+
+image:
+  repository: otwld/velero-ui
+  pullPolicy: IfNotPresent
+  tag: ""          # defaults to the chart's appVersion (0.10.2)
+
+configuration:
+  logLevel: info
+
+  general:
+    # Which namespace Velero lives in — the UI reads its CRs from here.
+    veleroNamespace: velero
+
+    # DISABLED DELIBERATELY. The chart creates a Secret from this value but never
+    # references it in the Deployment, so setting it here has NO effect and would
+    # only leave a confusing Secret containing the placeholder passphrase behind.
+    # The real passphrase is injected as AUTH_SECRET_PASSPHRASE under `env` below.
+    secretPassPhrase:
+      useSecret: false
+
+    # If you later run Grafana, put its URL here and the UI will link to it.
+    grafanaUrl: ""
+
+  # Fine-grained user/group policies (Casbin). Not needed for a single admin.
+  policies:
+    enabled: false
+
+serviceAccount:
+  create: true
+  automount: true
+
+# ---------------------------------------------------------------------------
+# RBAC — the most important block in this file.
+#
+# The chart's DEFAULT is clusterAdministrator: true, which binds the built-in
+# `cluster-admin` ClusterRole to this UI's ServiceAccount. Combined with the
+# chart's default admin/admin login, that hands full cluster control to anyone
+# who can reach the Service.
+#
+# Setting it false uses the chart's OWN purpose-built ClusterRole instead, which
+# grants only:
+#     nonResourceURLs  /healthz /readyz /livez /version   (get)
+#     namespaces                                          (get, list)
+#     velero.io/*                                         (*)
+# plus namespaced Roles for pods, pods/log, secrets and configmaps in the velero
+# namespace. That is everything the UI needs and nothing more.
+#
+# Residual risk to be aware of: read access to Secrets in the velero namespace
+# includes the object-storage credentials. That is inherent to showing backup
+# details, not something this setting can remove.
+# ---------------------------------------------------------------------------
+rbac:
+  create: true
+  clusterAdministrator: false
+
+service:
+  type: ClusterIP
+  port: 3000
+  # The chart's Service template has no nodePort field, so external access is a
+  # separate Service: manifests/velero-ui-nodeport.yaml
+
+# ---------------------------------------------------------------------------
+# Auth. Injected from the pre-created Secret so no credential lands in this file
+# or in Helm release history (which is stored in plaintext in etcd).
+# ---------------------------------------------------------------------------
+env:
+  - name: BASIC_AUTH_ENABLED
+    value: "true"
+  - name: BASIC_AUTH_USERNAME
+    valueFrom:
+      secretKeyRef:
+        name: velero-ui-auth
+        key: BASIC_AUTH_USERNAME
+  - name: BASIC_AUTH_PASSWORD
+    valueFrom:
+      secretKeyRef:
+        name: velero-ui-auth
+        key: BASIC_AUTH_PASSWORD
+  # Signs the session JWTs. The published default lets anyone forge a valid
+  # token and bypass the login completely, so this must be set.
+  - name: AUTH_SECRET_PASSPHRASE
+    valueFrom:
+      secretKeyRef:
+        name: velero-ui-auth
+        key: AUTH_SECRET_PASSPHRASE
+  - name: AUTH_SESSION_DURATION
+    value: "8h"
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# Runs on the single schedulable node; no toleration needed.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+ingress:
+  enabled: false
+  # For real use, terminate TLS at an Ingress instead of the plain-HTTP NodePort:
+  # enabled: true
+  # className: nginx
+  # annotations:
+  #   cert-manager.io/cluster-issuer: letsencrypt
+  # hosts:
+  #   - host: velero.example.com
+  #     paths:
+  #       - path: /
+  #         pathType: Prefix
+  # tls:
+  #   - secretName: velero-ui-tls
+  #     hosts: [velero.example.com]
+
+autoscaling:
+  enabled: false
